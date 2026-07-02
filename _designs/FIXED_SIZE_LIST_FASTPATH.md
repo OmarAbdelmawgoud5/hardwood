@@ -14,11 +14,12 @@ list-reconstruction state machine, emitting the same output as the regular path
 with implicit `(rows × k)` offsets.
 
 It requires **no Parquet format change and no writer change** — it is purely a
-reader optimisation over files existing writers already produce. Its second
-purpose is to measure how much of the known read-time gap between
-fixed-shape-as-`LIST` and the same data laid out flat is recoverable in the
-reader alone, as a data point for the `parquet-format` discussion on a native
-fixed-size-list type.
+reader optimisation over files existing writers already produce. It ships as a
+real but opt-in capability (off by default; see the configuration flag below),
+enabled deliberately while it matures in the field. As a byproduct it also
+quantifies how much of the known read-time gap between fixed-shape-as-`LIST` and
+the same data laid out flat is recoverable in the reader alone — a useful data
+point for the `parquet-format` discussion on a native fixed-size-list type.
 
 ## Background & motivation
 
