@@ -30,9 +30,9 @@ public sealed interface Page {
 
     int[] repetitionLevels();
 
-    /// Number of elements per row when this page is a clean fixed-size-list page
-    /// (every row a present list of exactly this many elements), or `0` when it
-    /// is a regular page. A clean page carries `null` level arrays: its
+    /// Number of elements per row when this page is a fixed-width fixed-size-list
+    /// page (every row a present list of exactly this many elements), or `0` when
+    /// it is a regular page. A fixed-width page carries `null` level arrays: its
     /// boundaries are implicit at multiples of `fixedListK`. See
     /// [FixedSizeListDetector].
     int fixedListK();
@@ -45,9 +45,9 @@ public sealed interface Page {
         return defLevels[index] < maxDefinitionLevel();
     }
 
-    /// Returns a copy of `page` marked as a clean fixed-size-list page with the
-    /// given element count. The values are shared; the level arrays (already
-    /// `null` on a clean decode) are carried through. This lets the fast path
+    /// Returns a copy of `page` marked as a fixed-width fixed-size-list page with
+    /// the given element count. The values are shared; the level arrays (already
+    /// `null` on a fixed-width decode) are carried through. This lets the fast path
     /// reuse the regular value decoders and stamp the shape afterwards.
     static Page withFixedListK(Page page, int fixedListK) {
         return switch (page) {

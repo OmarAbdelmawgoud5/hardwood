@@ -10,7 +10,7 @@ package dev.hardwood.internal.reader;
 /// Outcome of inspecting a data page's repetition/definition level streams for
 /// the fixed-size-list fast path.
 ///
-/// A page is [CleanFixedK] only when every row it carries is a present list of
+/// A page is [FixedWidth] only when every row it carries is a present list of
 /// exactly the same length — the shape produced by writing an
 /// `Arrow FixedSizeList` / fixed-shape tensor through the standard 3-level
 /// `LIST` encoding with no null rows and no null elements. Any deviation (nulls,
@@ -18,14 +18,14 @@ package dev.hardwood.internal.reader;
 /// yields [#NOT_APPLICABLE] and the caller must fall back to the regular
 /// record-reconstruction path.
 public sealed interface FixedSizeListShape
-        permits FixedSizeListShape.CleanFixedK, FixedSizeListShape.NotApplicable {
+        permits FixedSizeListShape.FixedWidth, FixedSizeListShape.NotApplicable {
 
     /// Every present row has exactly `k` elements, verified from the level
     /// streams without reading vector interiors.
     ///
     /// @param k the fixed number of elements per row; always `>= 1`
-    record CleanFixedK(int k) implements FixedSizeListShape {
-        public CleanFixedK {
+    record FixedWidth(int k) implements FixedSizeListShape {
+        public FixedWidth {
             if (k < 1) {
                 throw new IllegalArgumentException(
                         "Fixed list length must be >= 1, but was " + k);

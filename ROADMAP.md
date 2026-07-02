@@ -347,7 +347,7 @@ For field-level `parquet.thrift` metadata coverage (which spec fields are read/p
 - [x] Bloom filter-based row group filtering: `eq` on INT32, INT64, FLOAT, DOUBLE, and binary columns, and `in` on the integer and binary types (`RowGroupBloomFilterSource`; see `_designs/BLOOM_FILTER_PUSHDOWN.md`)
 
 ### 9.5 Fixed-size-list read fast path
-- [x] Detect clean fixed-*k* `LIST` pages from level streams alone (`FixedSizeListDetector`): O(1) definition-level gate + O(rows) repetition verification
+- [x] Detect fixed-width fixed-*k* `LIST` pages from level streams alone (`FixedSizeListDetector`): O(1) definition-level gate + O(rows) repetition verification
 - [x] SWAR word-at-a-time tiled compare for the small-*k* bit-packed regime
 - [x] Skip level materialization + record reconstruction on `DataPageV2` and `DataPageV1` (RLE-encoded levels); arithmetic offsets and all-present validity, transparent per-page fallback (`PageDecoder`, `NestedColumnWorker`, `ColumnReader`)
 - [x] Decode benchmark vs. naive `LIST` and flat-column floor (`FixedSizeListDecodeBenchmark`); recovers ~85–87% of the reconstruction gap (see `_designs/FIXED_SIZE_LIST_FASTPATH.md`)

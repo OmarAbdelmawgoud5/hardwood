@@ -206,7 +206,7 @@ public class PageDecoder {
     }
 
     /// The fixed-size-list fast path is restricted to primitive numeric element
-    /// types, which decode into contiguous primitive arrays the clean-page
+    /// types, which decode into contiguous primitive arrays the fixed-width
     /// assembly can bulk-copy. Byte-array-backed types (`BYTE_ARRAY`,
     /// `FIXED_LEN_BYTE_ARRAY`, `INT96`) take the regular path.
     private boolean isFixedListElementSupported() {
@@ -253,7 +253,7 @@ public class PageDecoder {
                     data, defLevelOffset, defLevelLength,
                     numValues, FixedSizeListDetector.ROWS_UNKNOWN,
                     column.maxRepetitionLevel(), column.maxDefinitionLevel());
-            if (shape instanceof FixedSizeListShape.CleanFixedK(int k)) {
+            if (shape instanceof FixedSizeListShape.FixedWidth(int k)) {
                 Page page = decodeTypedValues(
                         header.encoding(), data, valuesOffset, numValues, null, null, dictionary);
                 return Page.withFixedListK(page, k);
@@ -304,7 +304,7 @@ public class PageDecoder {
                     repLevelData, 0, repLevelLen, defLevelData, 0, defLevelLen,
                     numValues, header.numRows(),
                     column.maxRepetitionLevel(), column.maxDefinitionLevel());
-            if (shape instanceof FixedSizeListShape.CleanFixedK(int k)) {
+            if (shape instanceof FixedSizeListShape.FixedWidth(int k)) {
                 byte[] valuesData = readValueRegion(header, pageData, uncompressedPageSize,
                         repLevelLen, defLevelLen, valuesOffset, compressedValuesLen);
                 Page page = decodeTypedValues(

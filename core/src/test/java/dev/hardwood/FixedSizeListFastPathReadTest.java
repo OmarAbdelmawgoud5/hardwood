@@ -111,9 +111,9 @@ class FixedSizeListFastPathReadTest {
         }
     }
 
-    /// The row-reader path routes clean batches through `NestedBatchIndex` /
+    /// The row-reader path routes fixed-width batches through `NestedBatchIndex` /
     /// `PqList`, which read the (now `null`) level arrays and the arithmetic
-    /// offsets. This confirms those consumers tolerate the clean-batch shape.
+    /// offsets. This confirms those consumers tolerate the fixed-width-batch shape.
     @ParameterizedTest
     @ValueSource(ints = {1, 4, 8, 768})
     void rowReaderMatchesExpectedValues(int k) throws Exception {

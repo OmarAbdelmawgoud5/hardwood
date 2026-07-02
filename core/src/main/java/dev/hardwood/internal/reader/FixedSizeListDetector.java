@@ -13,7 +13,7 @@ import java.nio.ByteOrder;
 
 import dev.hardwood.internal.encoding.RleBitPackingHybridDecoder;
 
-/// Recognises the clean fixed-size-list shape from a `DataPageV2` page's
+/// Recognises the fixed-width fixed-size-list shape from a `DataPageV2` page's
 /// repetition/definition level streams alone, so the reader can skip the
 /// per-element list-reconstruction state machine.
 ///
@@ -68,12 +68,12 @@ public final class FixedSizeListDetector {
     /// @param defData    buffer holding the definition-level bytes
     /// @param defOffset  start of the definition-level region within `defData`
     /// @param defLength  length in bytes of the definition-level region
-    /// @param numValues  number of leaf values in the page (rows × k when clean)
+    /// @param numValues  number of leaf values in the page (rows × k when fixed-width)
     /// @param numRows    number of top-level rows in the page (`DataPageV2.num_rows`),
     ///                   or [#ROWS_UNKNOWN] when the header carries no row count
     /// @param maxRepetitionLevel the column's maximum repetition level
     /// @param maxDefinitionLevel the column's maximum definition level
-    /// @return [FixedSizeListShape.CleanFixedK] with the detected `k`, or
+    /// @return [FixedSizeListShape.FixedWidth] with the detected `k`, or
     ///         [FixedSizeListShape#NOT_APPLICABLE]
     public static FixedSizeListShape detect(
             byte[] repData, int repOffset, int repLength,
@@ -109,9 +109,10 @@ public final class FixedSizeListDetector {
     /// between boundaries without expanding interior runs.
     private static FixedSizeListShape repetitionShape(
             byte[] data, int offset, int length, int numValues, int numRows) {
-        // Small-k regime: the whole stream is one bit-packed run and cleanliness
-        // reduces to a bulk compare against the tiled period. Decisive when it
-        // applies; null defers the large-k / multi-run cases to the scalar walk.
+        // Small-k regime: the whole stream is one bit-packed run and the
+        // fixed-width check reduces to a bulk compare against the tiled period.
+        // Decisive when it applies; null defers the large-k / multi-run cases to
+        // the scalar walk.
         FixedSizeListShape tiled = tryTiledBitPacked(data, offset, length, numValues, numRows);
         if (tiled != null) {
             return tiled;
@@ -198,7 +199,7 @@ public final class FixedSizeListDetector {
         if (k == FAILED || !rowCountConsistent(numValues, numRows, k)) {
             return FixedSizeListShape.NOT_APPLICABLE;
         }
-        return new FixedSizeListShape.CleanFixedK(k);
+        return new FixedSizeListShape.FixedWidth(k);
     }
 
     private static final int FAILED = -2;
@@ -224,8 +225,8 @@ public final class FixedSizeListDetector {
     /// 63-group runs, so there may be many).
     ///
     /// It handles only single-byte-period lists — `k` dividing 8, i.e. `k` in
-    /// {2, 4, 8} — where the clean pattern is one repeating byte, so cleanliness
-    /// is a bulk compare of each run against that constant word. Multi-byte-period
+    /// {2, 4, 8} — where the fixed-width pattern is one repeating byte, so the
+    /// check is a bulk compare of each run against that constant word. Multi-byte-period
     /// small `k` (3/5/7) and the RLE-interior large-`k` shape return `null` and
     /// are handled by the scalar walk in [#repetitionShape].
     private static FixedSizeListShape tryTiledBitPacked(
@@ -254,7 +255,7 @@ public final class FixedSizeListDetector {
             if ((header & 1) == 0) {
                 // An RLE run: at the very start this is k == 1 or the large-k
                 // boundary-then-RLE shape (defer to the scalar walk); later it
-                // means the stream is not a clean small-k list.
+                // means the stream is not a fixed-width small-k list.
                 return idx == 0 ? null : FixedSizeListShape.NOT_APPLICABLE;
             }
             int groups = (int) (header >> 1);
@@ -297,15 +298,15 @@ public final class FixedSizeListDetector {
         if (k == 0 || !rowCountConsistent(numValues, numRows, k)) {
             return FixedSizeListShape.NOT_APPLICABLE;
         }
-        return new FixedSizeListShape.CleanFixedK(k);
+        return new FixedSizeListShape.FixedWidth(k);
     }
 
     private static int bitAt(byte[] data, int byteBase, int bitPos) {
         return (data[byteBase + (bitPos >>> 3)] >> (bitPos & 7)) & 1;
     }
 
-    /// The single repeating byte of the clean fixed-`k` pattern when `k` divides
-    /// 8: bit `i` is `0` exactly at a row boundary (`i % k == 0`), `1` otherwise.
+    /// The single repeating byte of the fixed-width `k`-element pattern when `k`
+    /// divides 8: bit `i` is `0` exactly at a row boundary (`i % k == 0`), `1` otherwise.
     private static int patternByte(int k) {
         int value = 0;
         for (int i = 0; i < 8; i++) {

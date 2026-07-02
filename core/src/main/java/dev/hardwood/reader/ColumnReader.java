@@ -713,8 +713,8 @@ public class ColumnReader implements AutoCloseable {
         out.recordCount = count;
         out.valueCount = total;
         out.values = compactPrimitive(src.values, keptLeaves);
-        // A clean fixed-k batch carries no level arrays; selection keeps whole
-        // k-element records, so it stays clean and the real view is rebuilt
+        // A fixed-width batch carries no level arrays; selection keeps whole
+        // k-element records, so it stays fixed-width and the real view is rebuilt
         // arithmetically from the new record count.
         out.definitionLevels = src.definitionLevels != null ? gather(src.definitionLevels, keptLeaves) : null;
         out.repetitionLevels = src.repetitionLevels != null ? gather(src.repetitionLevels, keptLeaves) : null;
@@ -756,7 +756,7 @@ public class ColumnReader implements AutoCloseable {
         return currentRealView;
     }
 
-    /// Real-items view for a clean fixed-size-list batch: all leaves present, so
+    /// Real-items view for a fixed-width fixed-size-list batch: all leaves present, so
     /// the single `REPEATED` layer carries arithmetic offsets and every validity
     /// is `null`; `realToRawLeaf` is `null` because the dense value stream is
     /// already the real-items stream (identity), so leaf values pass through
@@ -765,14 +765,9 @@ public class ColumnReader implements AutoCloseable {
         int k = batch.fixedListK;
         int recordCount = batch.recordCount;
         int layerCount = layers.count();
-        int[][] layerOffsets = new int[layerCount][];
-        for (int i = 0; i < layerCount; i++) {
-            if (layers.kinds()[i] == LayerKind.REPEATED) {
-                layerOffsets[i] = NestedLevelComputer.fixedListOffsets(k, recordCount);
-            }
-        }
         return new NestedLevelComputer.RealView(
-                layerOffsets, new long[layerCount][], null,
+                NestedLevelComputer.fixedListLayerOffsets(k, recordCount, layers),
+                new long[layerCount][], null,
                 Math.multiplyExact(recordCount, k), null);
     }
 

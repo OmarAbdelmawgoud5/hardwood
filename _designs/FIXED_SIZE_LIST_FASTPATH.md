@@ -78,7 +78,7 @@ follow-on vector-storage benchmarks) report a ~3× read-time gap between a
 
 The two level streams behave very differently and are handled separately. The
 detector is a pure predicate over a page's rep/def level regions that returns
-`CleanFixedK(k)` or `NotApplicable`; it reads no vector interiors and mutates
+`FixedWidth(k)` or `NotApplicable`; it reads no vector interiors and mutates
 nothing.
 
 ### Definition-level gate (O(1))
@@ -90,7 +90,7 @@ value `max_def_level` covering all values. Any other shape — a bit-packed run,
 multiple runs, any value below the max — means nulls or empty/short lists are
 present, and the page falls back. This gate is the precondition for everything
 downstream: once the def stream is a pure max-value run, no null can be hiding,
-and the rep stream must be the clean periodic form.
+and the rep stream must be the fixed-width periodic form.
 
 ### Repetition-level verification (O(rows))
 
@@ -113,15 +113,15 @@ the structure rather than assuming a split point.
 
 **Small *k* (interior run < 8, i.e. k ≤ 8).** No run reaches the RLE threshold,
 so the stream is entirely bit-packed. When `k` divides 8 (k ∈ {2, 4, 8}) the
-clean pattern is a single repeating byte (bit `p` is `0` exactly when
-`p % k == 0`), so cleanliness reduces to a bulk equality of each run's payload
+fixed-width pattern is a single repeating byte (bit `p` is `0` exactly when
+`p % k == 0`), so the check reduces to a bulk equality of each run's payload
 against that one byte. Writers chunk bit-packed runs (arrow-cpp emits 63-group
 runs), so the compare walks run by run; within a run it compares a `long` at a
 time — a SWAR-style equality over 8 packed levels against a constant word — with
 only the sub-word remainder and the final padding-masked byte handled scalar. A
-single word mismatch proves the shape unclean. Small `k` with a multi-byte
-period (3/5/7) and the large-*k* boundary-then-RLE shape both have no clean
-single-byte tiling, so they fall to the scalar walk.
+single word mismatch proves the shape is not fixed-width. Small `k` with a
+multi-byte period (3/5/7) and the large-*k* boundary-then-RLE shape both have no
+fixed-width single-byte tiling, so they fall to the scalar walk.
 
 Both regimes are sound in O(rows): a vector interior is never read for decode or
 for verification, because the RLE length that says "k−1 ones" is a number in a
@@ -143,7 +143,7 @@ marker (`0` for a regular page/batch). All types live in
 `dev.hardwood.internal.reader`.
 
 - **Detector** — `FixedSizeListDetector.detect(...)` returns a sealed
-  `FixedSizeListShape` (`CleanFixedK(k)` / `NotApplicable`). The def-gate reuses
+  `FixedSizeListShape` (`FixedWidth(k)` / `NotApplicable`). The def-gate reuses
   `RleBitPackingHybridDecoder.isSingleRleRunOf`; the rep verification is the
   tiled small-*k* compare (`tryTiledBitPacked` / `matchesConstant`, single-byte
   period only) with the scalar run-walk as the fallback for every other case
@@ -152,7 +152,7 @@ marker (`0` for a regular page/batch). All types live in
   and bounds check per word) and tests it against a constant pattern word — no
   per-word division and no loop-carried state.
 - **Page decode seam** — `PageDecoder.parseDataPageV2` runs the detector on the
-  raw level regions when `maxRep == 1 && maxDef == 2`. On `CleanFixedK(k)` it
+  raw level regions when `maxRep == 1 && maxDef == 2`. On `FixedWidth(k)` it
   decodes only the values (the regular value decoders already read densely from
   a null definition-level array — the all-present convention shared with flat
   columns) and stamps the shape with `Page.withFixedListK`. No value-decode path
@@ -162,23 +162,24 @@ marker (`0` for a regular page/batch). All types live in
   detector then verifies `numValues % k == 0` in place of the cross-check). V2
   slices levels pre-decompression; V1 reads them from the decompressed body —
   the only difference between the two seams.
-- **Assembly** — `NestedColumnWorker.assembleCleanPage` bulk-copies each
+- **Assembly** — `NestedColumnWorker.assembleFixedWidthPage` bulk-copies each
   record's values and sets record offsets arithmetically, skipping the
-  per-element level copy. A published batch stays homogeneous — wholly clean
-  (levels omitted) or wholly regular — but batch boundaries must fall at the
-  same rows across every column, which holds only at batch-capacity and file
-  boundaries. The assembler therefore never cuts a batch at a page boundary:
-  when an open clean batch meets a regular page or a different *k*, it converts
-  that batch to the regular representation in place — `materializeCleanBatchLevels`
-  synthesizes the omitted levels (all elements present, each record a `0`
-  followed by `k - 1` ones) — and keeps filling the same batch;
-  `assembleCleanPageAsRegular` then folds a clean page into an already-regular
-  batch with synthesized levels. A file with any irregular page transparently
-  falls back for the batches that span it, while wholly clean batches keep the
-  level-free layout. `computeIndex` produces the arithmetic layer offsets and
-  null validity for a clean batch.
+  per-element level copy. A published batch stays homogeneous — wholly
+  fixed-width (levels omitted) or wholly regular — but batch boundaries must fall
+  at the same rows across every column, which holds only at batch-capacity and
+  file boundaries. The assembler therefore never cuts a batch at a page boundary:
+  when an open fixed-width batch meets a regular page or a different *k*, it
+  converts that batch to the regular representation in place —
+  `materializeFixedWidthBatchLevels` synthesizes the omitted levels (all elements
+  present, each record a `0` followed by `k - 1` ones) — and keeps filling the
+  same batch. The same `assembleFixedWidthPage`, given an already-regular batch,
+  folds a fixed-width page into it with synthesized levels (its `asRegularBatch`
+  arm). A file with any irregular page transparently falls back for the batches
+  that span it, while wholly fixed-width batches keep the level-free layout.
+  `computeIndex` produces the arithmetic layer offsets and null validity for a
+  fixed-width batch.
 - **Column reader** — `ColumnReader.ensureRealView` builds the real-items view
-  directly for a clean batch (arithmetic offsets, null validity, identity
+  directly for a fixed-width batch (arithmetic offsets, null validity, identity
   pass-through of the dense values) instead of scanning levels;
   `compactNestedBatch` preserves the marker and is null-safe on the omitted
   level arrays.

@@ -11,7 +11,7 @@ import java.io.ByteArrayOutputStream;
 
 import org.junit.jupiter.api.Test;
 
-import dev.hardwood.internal.reader.FixedSizeListShape.CleanFixedK;
+import dev.hardwood.internal.reader.FixedSizeListShape.FixedWidth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,7 +30,7 @@ class FixedSizeListDetectorTest {
     void detectsSmallKAllBitPacked() {
         // k = 4, 8 rows: pattern 0,1,1,1 repeated -> every byte is 0xEE.
         byte[] rep = bitPacked(repeatVector(4, 8));
-        assertThat(detect(rep, 32, 8)).isEqualTo(new CleanFixedK(4));
+        assertThat(detect(rep, 32, 8)).isEqualTo(new FixedWidth(4));
     }
 
     @Test
@@ -38,7 +38,7 @@ class FixedSizeListDetectorTest {
         // k = 4, 3 rows -> 12 values; the final bit-packed group is padded with
         // four trailing zeros that must not be read as extra boundaries.
         byte[] rep = bitPacked(repeatVector(4, 3));
-        assertThat(detect(rep, 12, 3)).isEqualTo(new CleanFixedK(4));
+        assertThat(detect(rep, 12, 3)).isEqualTo(new FixedWidth(4));
     }
 
     @Test
@@ -46,7 +46,7 @@ class FixedSizeListDetectorTest {
         // k = 8: the interior run of seven 1s is below the RLE threshold, so the
         // stream stays fully bit-packed.
         byte[] rep = bitPacked(repeatVector(8, 4));
-        assertThat(detect(rep, 32, 4)).isEqualTo(new CleanFixedK(8));
+        assertThat(detect(rep, 32, 4)).isEqualTo(new FixedWidth(8));
     }
 
     // --- Large k: bit-packed boundary group followed by an RLE run of 1s -----
@@ -59,7 +59,7 @@ class FixedSizeListDetectorTest {
         byte[] rep = concat(
                 largeVector(768),
                 largeVector(768));
-        assertThat(detect(rep, 1536, 2)).isEqualTo(new CleanFixedK(768));
+        assertThat(detect(rep, 1536, 2)).isEqualTo(new FixedWidth(768));
     }
 
     @Test
@@ -71,7 +71,7 @@ class FixedSizeListDetectorTest {
                 bitPacked(new int[] {0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}),
                 rle(1, 768 - 16));
         byte[] rep = concat(oneRow, oneRow);
-        assertThat(detect(rep, 1536, 2)).isEqualTo(new CleanFixedK(768));
+        assertThat(detect(rep, 1536, 2)).isEqualTo(new FixedWidth(768));
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -83,12 +83,12 @@ class FixedSizeListDetectorTest {
         int rows = 200 + k;
         int numValues = k * rows;
         byte[] rep = bitPacked(repeatVector(k, rows));
-        assertThat(detect(rep, numValues, rows)).isEqualTo(new CleanFixedK(k));
+        assertThat(detect(rep, numValues, rows)).isEqualTo(new FixedWidth(k));
     }
 
     @Test
     void rejectsCorruptionInBitPackedInterior() {
-        // A clean k=4 stream with one interior element turned into a boundary:
+        // A fixed-width k=4 stream with one interior element turned into a boundary:
         // the tiled compare must reject it rather than accept a wrong shape.
         int[] levels = repeatVector(4, 64);
         levels[130] = 0; // was an interior 1; now an extra row start
@@ -101,13 +101,13 @@ class FixedSizeListDetectorTest {
         // k = 1: every value starts its own row, so the rep stream is one RLE run
         // of zeros.
         byte[] rep = rle(0, 5);
-        assertThat(detect(rep, 5, 5)).isEqualTo(new CleanFixedK(1));
+        assertThat(detect(rep, 5, 5)).isEqualTo(new FixedWidth(1));
     }
 
     @Test
     void detectsSingleRowVector() {
         byte[] rep = largeVector(768);
-        assertThat(detect(rep, 768, 1)).isEqualTo(new CleanFixedK(768));
+        assertThat(detect(rep, 768, 1)).isEqualTo(new FixedWidth(768));
     }
 
     // --- Definition-level gate rejections -----------------------------------
@@ -115,7 +115,7 @@ class FixedSizeListDetectorTest {
     @Test
     void rejectsWhenDefinitionLevelsCarryNulls() {
         // A null element drops one def below maxDef, so the def stream is no
-        // longer a single RLE run of 2 — fall back even though rep looks clean.
+        // longer a single RLE run of 2 — fall back even though rep looks fixed-width.
         byte[] rep = bitPacked(repeatVector(4, 2));
         byte[] def = bitPacked(new int[] {2, 2, 2, 0, 2, 2, 2, 2});
         assertThat(FixedSizeListDetector.detect(
@@ -151,7 +151,7 @@ class FixedSizeListDetectorTest {
 
     @Test
     void rejectsRowCountMismatch() {
-        // Clean k = 4 over 8 rows, but the header claims 7 rows.
+        // Fixed-width k = 4 over 8 rows, but the header claims 7 rows.
         byte[] rep = bitPacked(repeatVector(4, 8));
         assertThat(detect(rep, 32, 7)).isEqualTo(FixedSizeListShape.NOT_APPLICABLE);
     }

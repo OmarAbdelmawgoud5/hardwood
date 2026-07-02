@@ -29,7 +29,7 @@ import dev.hardwood.reader.RowReader;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /// Differential value comparison for the fixed-size-list read fast path: reads
-/// clean fixed-`k` `LIST` columns through hardwood (which engages the fast path)
+/// fixed-width `LIST` columns through hardwood (which engages the fast path)
 /// and through DuckDB (the oracle, which reads each `LIST` as a SQL array) and
 /// asserts the vectors agree element for element.
 ///
@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /// Further fixtures push the fast path across the fallback-sensitive paths a
 /// single uncompressed, single-page, single-row-group file cannot reach:
 /// snappy/zstd compression, small pages and multiple row groups, a column mixing
-/// clean and null pages (the batch-homogeneity flush), and a row filter over a
+/// fixed-width and null pages (the batch-homogeneity flush), and a row filter over a
 /// fast-path column (`compactNestedBatch`). All are checked against an external
 /// reader rather than only against hardwood's own reconstruction path.
 @Tag("differential")
@@ -74,7 +74,7 @@ class DifferentialFixedSizeListTest {
     }
 
     /// Small pages and row groups spread the fast-path column across many page and
-    /// row-group boundaries; `vec_mixed` additionally interleaves clean and null
+    /// row-group boundaries; `vec_mixed` additionally interleaves fixed-width and null
     /// pages so a batch spanning both exercises the batch-homogeneity flush.
     @Test
     void pagedFixedSizeListValuesMatchOracle() throws Exception {

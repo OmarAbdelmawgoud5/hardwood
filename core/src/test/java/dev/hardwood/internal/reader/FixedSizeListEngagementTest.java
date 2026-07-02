@@ -30,19 +30,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 /// [PageDecoder] produces — rather than through any user-visible difference.
 class FixedSizeListEngagementTest {
 
-    private static final Path CLEAN_FLOAT = Paths.get("src/test/resources/fixed_size_list_k4_v2.parquet");
+    private static final Path FIXED_WIDTH_FLOAT = Paths.get("src/test/resources/fixed_size_list_k4_v2.parquet");
     private static final Path BYTE_ARRAY = Paths.get("src/test/resources/fixed_size_list_flba_v2.parquet");
     private static final Path PAGED =
             Paths.get("src/test/resources/differential/diff_fixed_size_list_paged.parquet");
 
     @Test
     void flagAndElementTypeControlEngagement() throws Exception {
-        assertThat(firstPageFixedListK(CLEAN_FLOAT, true)).as("clean float list, fast path on").isEqualTo(4);
-        assertThat(firstPageFixedListK(CLEAN_FLOAT, false)).as("fast path disabled").isZero();
+        assertThat(firstPageFixedListK(FIXED_WIDTH_FLOAT, true)).as("fixed-width float list, fast path on").isEqualTo(4);
+        assertThat(firstPageFixedListK(FIXED_WIDTH_FLOAT, false)).as("fast path disabled").isZero();
         assertThat(firstPageFixedListK(BYTE_ARRAY, true)).as("byte-array element declines").isZero();
     }
 
-    /// The clean fixed-k columns of the differential base fixture span every
+    /// The fixed-width columns of the differential base fixture span every
     /// primitive element type the fast path bulk-copies (FLOAT/INT32/INT64/DOUBLE/
     /// BOOLEAN, `vec_i32` additionally dictionary-encoded). Each must engage on
     /// every page so the differential oracle check exercises `copyValueRun`'s
@@ -58,12 +58,12 @@ class FixedSizeListEngagementTest {
         }
     }
 
-    /// The `vec_mixed` column of the paged fixture interleaves clean pages (fast
+    /// The `vec_mixed` column of the paged fixture interleaves fixed-width pages (fast
     /// path) with pages carrying null rows (fallback). This proves the fixture
     /// actually exercises both, so the mixed-batch handling in `NestedColumnWorker`
     /// is genuinely covered rather than passing vacuously.
     @Test
-    void mixedColumnHasBothCleanAndFallbackPages() throws Exception {
+    void mixedColumnHasBothFixedWidthAndFallbackPages() throws Exception {
         List<Integer> perPageK = allPageFixedListK(PAGED, "vec_mixed");
         assertThat(perPageK).as("some pages engage the fast path").contains(4);
         assertThat(perPageK).as("some pages fall back").contains(0);
