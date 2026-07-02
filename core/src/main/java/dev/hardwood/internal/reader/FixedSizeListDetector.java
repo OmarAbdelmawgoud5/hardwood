@@ -220,23 +220,30 @@ public final class FixedSizeListDetector {
     }
 
     /// Fast path for a bit-packed repetition stream — the small-k regime, where
-    /// no interior run of `1`s reaches the RLE threshold, so the stream is made
-    /// entirely of bit-packed runs (writers chunk them, e.g. arrow-cpp emits
-    /// 63-group runs, so there may be many).
+    /// no interior run of `1`s reaches the RLE threshold (`k <= 8`), so the
+    /// stream is entirely bit-packed runs (writers chunk them, e.g. arrow-cpp
+    /// emits 63-group runs, so there may be many).
     ///
-    /// It handles only single-byte-period lists — `k` dividing 8, i.e. `k` in
-    /// {2, 4, 8} — where the fixed-width pattern is one repeating byte, so the
-    /// check is a bulk compare of each run against that constant word. Multi-byte-period
-    /// small `k` (3/5/7) and the RLE-interior large-`k` shape return `null` and
-    /// are handled by the scalar walk in [#repetitionShape].
+    /// The fixed-width pattern is byte-periodic with period `k / gcd(k, 8)`: one
+    /// byte for `k` dividing 8 (`k` in {1,2,4,8}), or 3/5/7 bytes for the
+    /// multi-byte periods (`k` in {3,5,6,7}). Each run's payload is compared
+    /// against that period tiled across it, a word (eight packed levels) at a
+    /// time. For a single-byte period the reference word is a constant; for a
+    /// multi-byte period the word is selected from a per-phase reference table,
+    /// indexed by the run's byte offset in the stream. The RLE-interior large-`k`
+    /// shape (no second boundary within the first run) returns `null` and is
+    /// handled by the scalar walk in [#repetitionShape].
     private static FixedSizeListShape tryTiledBitPacked(
             byte[] data, int offset, int length, int numValues, int numRows) {
         int pos = offset;
         int end = offset + length;
-        int idx = 0;       // global value index (a multiple of 8 at each run start)
-        int k = 0;         // established once the first bit-packed run is seen
-        int refByte = 0;   // the one repeating pattern byte for this k
-        long refWord = 0;  // eight copies of refByte, for the word-at-a-time compare
+        int idx = 0;        // global value index (a multiple of 8 at each run start)
+        int k = 0;          // established once the first bit-packed run is seen
+        int period = 0;     // byte period of the pattern (1 for k | 8, else 3/5/7)
+        int refByte = 0;    // single-byte-period reference (period == 1)
+        long refWord = 0;   // eight copies of refByte, for the word-at-a-time compare
+        byte[] refPat = null;   // multi-byte-period reference bytes (period > 1)
+        long[] refWords = null; // reference word per phase (period > 1)
 
         while (idx < numValues) {
             if (pos >= end) {
@@ -278,17 +285,36 @@ public final class FixedSizeListDetector {
                         break;
                     }
                 }
-                if (k == 0 || 8 % k != 0) {
-                    // No second boundary (large-k), or a multi-byte period
-                    // (k in {3,5,6,7}): leave both to the scalar walk.
-                    return null;
+                if (k == 0) {
+                    return null; // no second boundary: large k, defer to the scalar walk
                 }
-                refByte = patternByte(k);
-                refWord = (refByte & 0xFFL) * 0x0101010101010101L;
+                period = k / gcd(k, 8);
+                if (period == 1) {
+                    refByte = patternByte(k, 0);
+                    refWord = (refByte & 0xFFL) * 0x0101010101010101L;
+                }
+                else {
+                    refPat = new byte[period];
+                    for (int j = 0; j < period; j++) {
+                        refPat[j] = (byte) patternByte(k, j);
+                    }
+                    refWords = new long[period];
+                    for (int p = 0; p < period; p++) {
+                        long word = 0;
+                        for (int i = 0; i < 8; i++) {
+                            word |= (refPat[(p + i) % period] & 0xFFL) << (8 * i);
+                        }
+                        refWords[p] = word;
+                    }
+                }
             }
 
             int compareBits = Math.min(groups * 8, numValues - idx);
-            if (!matchesConstant(data, payloadPos, refByte, refWord, compareBits)) {
+            boolean matches = period == 1
+                    ? matchesConstant(data, payloadPos, refByte, refWord, compareBits)
+                    : matchesPattern(data, payloadPos, refPat, refWords, period,
+                            (idx >> 3) % period, compareBits);
+            if (!matches) {
                 return FixedSizeListShape.NOT_APPLICABLE;
             }
             pos += groups;
@@ -305,12 +331,15 @@ public final class FixedSizeListDetector {
         return (data[byteBase + (bitPos >>> 3)] >> (bitPos & 7)) & 1;
     }
 
-    /// The single repeating byte of the fixed-width `k`-element pattern when `k`
-    /// divides 8: bit `i` is `0` exactly at a row boundary (`i % k == 0`), `1` otherwise.
-    private static int patternByte(int k) {
+    /// Byte `byteIndex` of the fixed-width `k`-element pattern: bit `i` is `0`
+    /// exactly at a row boundary (`(byteIndex * 8 + i) % k == 0`), `1` otherwise.
+    /// The byte sequence is periodic with period `k / gcd(k, 8)`, so a single
+    /// byte suffices for `k` dividing 8 and 3/5/7 bytes for the rest.
+    private static int patternByte(int k, int byteIndex) {
+        int base = byteIndex * 8;
         int value = 0;
         for (int i = 0; i < 8; i++) {
-            if (i % k != 0) {
+            if ((base + i) % k != 0) {
                 value |= 1 << i;
             }
         }
@@ -343,6 +372,49 @@ public final class FixedSizeListDetector {
             }
         }
         return true;
+    }
+
+    /// Multi-byte-period counterpart of [#matchesConstant]: compares `compareBits`
+    /// bits of a run's payload against the `k`-periodic pattern tiled across it, a
+    /// word at a time. `startPhase` is the run's byte offset in the stream modulo
+    /// `period` — the phase of its first byte — selecting the first reference word
+    /// from `refWords`; each full word advances the phase by 8 bytes. The sub-word
+    /// remainder and the final padding-masked byte compare against the per-byte
+    /// pattern `refPat`.
+    private static boolean matchesPattern(byte[] data, int payloadPos, byte[] refPat, long[] refWords,
+                                          int period, int startPhase, int compareBits) {
+        int fullBytes = compareBits >>> 3;
+        int b = 0;
+        int phase = startPhase;
+        for (; b + 8 <= fullBytes; b += 8) {
+            if (readLongLE(data, payloadPos + b) != refWords[phase]) {
+                return false;
+            }
+            phase = (phase + 8) % period;
+        }
+        for (; b < fullBytes; b++) {
+            if ((data[payloadPos + b] & 0xFF) != (refPat[phase] & 0xFF)) {
+                return false;
+            }
+            phase = phase + 1 == period ? 0 : phase + 1;
+        }
+        int tailBits = compareBits & 7;
+        if (tailBits != 0) {
+            int mask = (1 << tailBits) - 1;
+            if ((data[payloadPos + fullBytes] & mask) != (refPat[phase] & mask)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int gcd(int a, int b) {
+        while (b != 0) {
+            int t = b;
+            b = a % b;
+            a = t;
+        }
+        return a;
     }
 
     private static long readLongLE(byte[] data, int off) {

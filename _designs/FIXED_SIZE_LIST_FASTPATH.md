@@ -113,16 +113,19 @@ encoder-dependent (parquet-mr / arrow-cpp / arrow-rs differ); the walk matches
 the structure rather than assuming a split point.
 
 **Small *k* (interior run < 8, i.e. k ≤ 8).** No run reaches the RLE threshold,
-so the stream is entirely bit-packed. When `k` divides 8 (k ∈ {2, 4, 8}) the
-fixed-width pattern is a single repeating byte (bit `p` is `0` exactly when
-`p % k == 0`), so the check reduces to a bulk equality of each run's payload
-against that one byte. Writers chunk bit-packed runs (arrow-cpp emits 63-group
-runs), so the compare walks run by run; within a run it compares a `long` at a
-time — a SWAR-style equality over 8 packed levels against a constant word — with
-only the sub-word remainder and the final padding-masked byte handled scalar. A
-single word mismatch proves the shape is not fixed-width. Small `k` with a
-multi-byte period (3/5/7) and the large-*k* boundary-then-RLE shape both have no
-fixed-width single-byte tiling, so they fall to the scalar walk.
+so the stream is entirely bit-packed. The fixed-width pattern is byte-periodic
+with period `k / gcd(k, 8)`: a single repeating byte for `k` dividing 8
+(k ∈ {1, 2, 4, 8}, bit `p` is `0` exactly when `p % k == 0`), or 3/5/7 bytes for
+the multi-byte periods (k ∈ {3, 5, 6, 7}). Either way the check reduces to a bulk
+equality of each run's payload against that period tiled across it. Writers chunk
+bit-packed runs (arrow-cpp emits 63-group runs), so the compare walks run by run;
+within a run it compares a `long` at a time — a SWAR-style equality over 8 packed
+levels — with only the sub-word remainder and the final padding-masked byte
+handled scalar. For a single-byte period the reference word is a constant; for a
+multi-byte period it is selected per word from a `period`-entry table keyed by the
+run's byte offset in the stream (its phase). A single word mismatch proves the
+shape is not fixed-width. Only the large-*k* boundary-then-RLE shape (no second
+boundary within the first run) falls to the scalar walk.
 
 Both regimes are sound in O(rows): a vector interior is never read for decode or
 for verification, because the RLE length that says "k−1 ones" is a number in a
@@ -146,12 +149,16 @@ marker (`0` for a regular page/batch). All types live in
 - **Detector** — `FixedSizeListDetector.detect(...)` returns a sealed
   `FixedSizeListShape` (`FixedWidth(k)` / `NotApplicable`). The def-gate reuses
   `RleBitPackingHybridDecoder.isSingleRleRunOf`; the rep verification is the
-  tiled small-*k* compare (`tryTiledBitPacked` / `matchesConstant`, single-byte
-  period only) with the scalar run-walk as the fallback for every other case
-  (multi-byte-period small `k`, large `k`, multi-run). The tiled compare reads
-  each 8-byte word through a `byte[]`-to-`long` `VarHandle` (one unaligned load
-  and bounds check per word) and tests it against a constant pattern word — no
-  per-word division and no loop-carried state.
+  tiled small-*k* compare (`tryTiledBitPacked`) over all `k ≤ 8` — `matchesConstant`
+  for a single-byte period, `matchesPattern` for the 3/5/7-byte periods — with the
+  scalar run-walk as the fallback only for large `k` (RLE interior) and unexpected
+  multi-run shapes. The tiled compare reads each 8-byte word through a
+  `byte[]`-to-`long` `VarHandle` (one unaligned load and bounds check per word) and
+  tests it against the reference word: a constant for the single-byte period, or a
+  per-phase table entry for a multi-byte period. Tiling the multi-byte periods cuts
+  their isolated detector cost ~20× (≈6 ms → ≈0.3 ms per 8M values at k=3, in line
+  with the single-byte periods); as with the single-byte SWAR, this does not move
+  the end-to-end recovered fraction, since detection overlaps value decode.
 - **Page decode seam** — `PageDecoder.parseDataPageV2` runs the detector on the
   raw level regions when `maxRep == 1 && maxDef == 2`. On `FixedWidth(k)` it
   decodes only the values (the regular value decoders already read densely from

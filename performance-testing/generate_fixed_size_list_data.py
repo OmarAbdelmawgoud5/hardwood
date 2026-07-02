@@ -35,7 +35,9 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-K_SWEEP = [4, 8, 16, 128, 768, 1536]
+# k=3 covers the multi-byte-period bit-packed regime (period 3 bytes, the RGB /
+# 3D-vector case); 4 and 8 are single-byte-period; 16+ have an RLE interior.
+K_SWEEP = [3, 4, 8, 16, 128, 768, 1536]
 TOTAL_VALUES = 8_000_000  # leaf floats per file; rows = TOTAL_VALUES // k
 
 DEFAULT_OUTPUT_DIR = os.path.join(
