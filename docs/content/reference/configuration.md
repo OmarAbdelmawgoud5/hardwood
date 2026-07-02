@@ -118,7 +118,7 @@ import dev.hardwood.reader.ParquetFileReader;
 import dev.hardwood.reader.ReaderConfig;
 
 ReaderConfig config = ReaderConfig.builder()
-        .option("hardwood.fixed-list-fast-path", "false")
+        .option("hardwood.fixed-list-fast-path", "true")
         .build();
 
 try (HardwoodContext context = HardwoodContext.create();
@@ -133,7 +133,7 @@ Options are string-keyed and keys are matched case-sensitively; boolean option v
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `hardwood.fixed-list-fast-path` | `true` | Decode fixed-size `LIST` columns (e.g. embedding vectors, where every row holds the same number of non-null elements) without reconstructing per-row definition and repetition levels. Set to `"false"` to always take the general nested-decode path. |
+| `hardwood.fixed-list-fast-path` | `false` | Set to `"true"` to decode fixed-size `LIST` columns (e.g. embedding vectors, where every row holds the same number of non-null elements) without reconstructing per-row definition and repetition levels. Off by default, so every column takes the general nested-decode path unless the option is enabled. |
 
 ## System Properties Reference
 

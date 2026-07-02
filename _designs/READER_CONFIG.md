@@ -68,7 +68,7 @@ surface.
 
 ```java
 ReaderConfig config = ReaderConfig.builder()
-        .option("hardwood.fixed-list-fast-path", "false")
+        .option("hardwood.fixed-list-fast-path", "true")
         .build();
 
 try (HardwoodContext context = HardwoodContext.create();
@@ -78,20 +78,21 @@ try (HardwoodContext context = HardwoodContext.create();
 ```
 
 `ParquetFileReader.open` / `openAll` gain an overload taking a `ReaderConfig`; the
-existing overloads use `ReaderConfig.defaults()` (fast path on). The reader stores
+existing overloads use `ReaderConfig.defaults()` (fast path off). The reader stores
 the config and threads it to the column/row reader factories, which resolve the
 concrete flags when constructing decode workers.
 
 ## Fixed-size-list fast path flag
 
-The `hardwood.fixed-list-fast-path` option (default `"true"`) gates the
+The `hardwood.fixed-list-fast-path` option (default `"false"`) gates the
 fixed-size-list read fast path (see
 [FIXED_SIZE_LIST_FASTPATH.md](FIXED_SIZE_LIST_FASTPATH.md)), resolved privately in
-`ParquetFileReader`. Setting it to `"false"` forces the general nested-decode path
-for every column. It is a transitional escape hatch: once the fast path is
-unconditionally trusted, the key drops out of the recognised set (callers still
-passing it get the unknown-key warning) and the private resolver and decode branch
-are removed — the public `ReaderConfig` surface never changes.
+`ParquetFileReader`. The fast path is **opt-in** while it matures: set the option to
+`"true"` to enable it; by default every column takes the general nested-decode path.
+Once the fast path is unconditionally trusted the default flips to on and,
+eventually, the key drops out of the recognised set (callers still passing it get
+the unknown-key warning) and the private resolver and decode branch are removed —
+the public `ReaderConfig` surface never changes.
 
 ## Scope
 

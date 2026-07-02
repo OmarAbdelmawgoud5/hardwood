@@ -39,6 +39,12 @@ class FixedSizeListFastPathReadTest {
 
     private static final String COLUMN = "vec.list.element";
 
+    /// The fast path is opt-in (off by default), so every read here that means to
+    /// exercise it must enable it explicitly — otherwise these assertions would
+    /// pass vacuously against the regular reconstruction path.
+    private static final ReaderConfig FAST_PATH_ON =
+            ReaderConfig.builder().option("hardwood.fixed-list-fast-path", "true").build();
+
     @ParameterizedTest
     @ValueSource(ints = {1, 4, 8, 768})
     void fastPathMatchesAcrossPageVersionsAndExpectedValues(int k) throws Exception {
@@ -76,7 +82,7 @@ class FixedSizeListFastPathReadTest {
         // One shared context (one thread pool) backs both configs — the point of
         // splitting behaviour (ReaderConfig) from resources (HardwoodContext).
         try (HardwoodContext context = HardwoodContext.create()) {
-            viaFast = readVectors(resource(4, version), 4, context, ReaderConfig.defaults());
+            viaFast = readVectors(resource(4, version), 4, context, FAST_PATH_ON);
             viaRegular = readVectors(resource(4, version), 4, context,
                     ReaderConfig.builder().option("hardwood.fixed-list-fast-path", "false").build());
         }
@@ -92,7 +98,9 @@ class FixedSizeListFastPathReadTest {
     /// `0, 1…1` per-row pattern — the same the regular path would materialize.
     @Test
     void escapeHatchSynthesizesLevelsOnFastPath() throws Exception {
-        try (ParquetFileReader reader = ParquetFileReader.open(InputFile.of(resource(4, "v2")));
+        try (HardwoodContext context = HardwoodContext.create();
+             ParquetFileReader reader =
+                     ParquetFileReader.open(InputFile.of(resource(4, "v2")), context, FAST_PATH_ON);
              ColumnReader col = reader.columnReader(COLUMN)) {
             int records = 0;
             while (col.nextBatch()) {
@@ -117,7 +125,9 @@ class FixedSizeListFastPathReadTest {
     @ParameterizedTest
     @ValueSource(ints = {1, 4, 8, 768})
     void rowReaderMatchesExpectedValues(int k) throws Exception {
-        try (ParquetFileReader reader = ParquetFileReader.open(InputFile.of(resource(k, "v2")));
+        try (HardwoodContext context = HardwoodContext.create();
+             ParquetFileReader reader =
+                     ParquetFileReader.open(InputFile.of(resource(k, "v2")), context, FAST_PATH_ON);
              RowReader rows = reader.rowReader()) {
             int r = 0;
             while (rows.hasNext()) {
@@ -140,7 +150,7 @@ class FixedSizeListFastPathReadTest {
     /// which may legitimately differ between the fast and regular paths.
     private static List<float[]> readVectors(Path file, int k) throws Exception {
         try (HardwoodContext context = HardwoodContext.create()) {
-            return readVectors(file, k, context, ReaderConfig.defaults());
+            return readVectors(file, k, context, FAST_PATH_ON);
         }
     }
 

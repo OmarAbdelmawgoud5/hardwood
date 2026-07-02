@@ -104,11 +104,13 @@ public class ParquetFileReader implements AutoCloseable {
 
     private static final System.Logger LOG = System.getLogger(ParquetFileReader.class.getName());
 
-    /// Resolves the fixed-size-list fast-path flag from a [ReaderConfig] (enabled
-    /// unless the option is explicitly `"false"`).
+    /// Resolves the fixed-size-list fast-path flag from a [ReaderConfig]. The fast
+    /// path is **opt-in**: it stays disabled unless the option is explicitly
+    /// `"true"`, so it is off by default while it matures and a caller must enable
+    /// it deliberately.
     private static boolean resolveFixedListFastPath(ReaderConfig readerConfig) {
-        return !"false".equalsIgnoreCase(
-                readerConfig.options().getOrDefault(FIXED_LIST_FAST_PATH_OPTION, "true"));
+        return "true".equalsIgnoreCase(
+                readerConfig.options().getOrDefault(FIXED_LIST_FAST_PATH_OPTION, "false"));
     }
 
     /// Logs a `WARNING` for each [ReaderConfig] option key the reader does not

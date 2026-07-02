@@ -24,6 +24,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import dev.hardwood.reader.FilterPredicate;
 import dev.hardwood.reader.ParquetFileReader;
 import dev.hardwood.reader.ParquetFileReader.RowReaderBuilder;
+import dev.hardwood.reader.ReaderConfig;
 import dev.hardwood.reader.RowReader;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,6 +52,12 @@ class DifferentialFixedSizeListTest {
     private static final Path DIR = Paths.get("src/test/resources/differential");
     private static final Path FILE = DIR.resolve("diff_fixed_size_list.parquet");
     private static final long EXPECTED_ROWS = 120;
+
+    /// The fast path is opt-in (off by default), so it must be enabled explicitly
+    /// for the oracle comparison to actually exercise it rather than falling back
+    /// to the regular reconstruction path.
+    private static final ReaderConfig FAST_PATH_ON =
+            ReaderConfig.builder().option("hardwood.fixed-list-fast-path", "true").build();
 
     @Test
     void fixedSizeListValuesMatchOracle() throws Exception {
@@ -80,7 +87,8 @@ class DifferentialFixedSizeListTest {
     void pagedFixedSizeListValuesMatchOracle() throws Exception {
         Path file = DIR.resolve("diff_fixed_size_list_paged.parquet");
         String sql = "SELECT * FROM read_parquet('" + file.toAbsolutePath() + "') ORDER BY __row__";
-        try (ParquetFileReader reader = ParquetFileReader.open(InputFile.of(file));
+        try (HardwoodContext context = HardwoodContext.create();
+             ParquetFileReader reader = ParquetFileReader.open(InputFile.of(file), context, FAST_PATH_ON);
              RowReader rows = reader.buildRowReader().build();
              Connection conn = DriverManager.getConnection("jdbc:duckdb:");
              Statement stmt = conn.createStatement();
@@ -107,7 +115,8 @@ class DifferentialFixedSizeListTest {
             throws Exception {
         String sql = "SELECT * FROM read_parquet('" + file.toAbsolutePath() + "')"
                 + (where == null ? "" : " WHERE " + where) + " ORDER BY __row__";
-        try (ParquetFileReader reader = ParquetFileReader.open(InputFile.of(file));
+        try (HardwoodContext context = HardwoodContext.create();
+             ParquetFileReader reader = ParquetFileReader.open(InputFile.of(file), context, FAST_PATH_ON);
              RowReader rows = openRows(reader, where);
              Connection conn = DriverManager.getConnection("jdbc:duckdb:");
              Statement stmt = conn.createStatement();

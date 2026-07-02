@@ -184,10 +184,11 @@ marker (`0` for a regular page/batch). All types live in
   `compactNestedBatch` preserves the marker and is null-safe on the omitted
   level arrays.
 - **Configuration** — the `hardwood.fixed-list-fast-path` [ReaderConfig] option
-  (default enabled; see [READER_CONFIG.md](READER_CONFIG.md)) is resolved in
-  `ParquetFileReader` and threads through to `PageDecoder`. Setting it to `"false"`
-  disables the fast path, both as a kill-switch and so the record-reconstruction
-  baseline can be measured on the very same files.
+  (default disabled — opt-in while the fast path matures; see
+  [READER_CONFIG.md](READER_CONFIG.md)) is resolved in `ParquetFileReader` and
+  threads through to `PageDecoder`. Set it to `"true"` to enable the fast path;
+  leaving it unset keeps the record-reconstruction path, which also lets the
+  baseline be measured on the very same files.
 
 ## Results
 
