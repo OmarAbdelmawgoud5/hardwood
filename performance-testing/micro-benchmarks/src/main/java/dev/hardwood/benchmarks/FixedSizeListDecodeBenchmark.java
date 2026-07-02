@@ -94,8 +94,10 @@ public class FixedSizeListDecodeBenchmark {
     private List<LevelRegion> levelRegions;
 
     /// One shared context (thread pool + native pools) backs both configs. The
-    /// fast path enabled (default) and disabled (the reconstruction baseline)
-    /// differ only in [ReaderConfig], measured on the same files.
+    /// fast path explicitly enabled and disabled (the reconstruction baseline)
+    /// differ only in [ReaderConfig], measured on the same files. The fast path is
+    /// opt-in (off by default), so `fastConfig` sets the option rather than
+    /// relying on the defaults.
     private HardwoodContext context;
     private ReaderConfig fastConfig;
     private ReaderConfig noFastConfig;
@@ -112,7 +114,7 @@ public class FixedSizeListDecodeBenchmark {
         flatPath = resolve("fixed_size_list_k" + k + "_flat.parquet");
         levelRegions = extractLevelRegions(listPath);
         context = HardwoodContext.create();
-        fastConfig = ReaderConfig.defaults();
+        fastConfig = ReaderConfig.builder().option("hardwood.fixed-list-fast-path", "true").build();
         noFastConfig = ReaderConfig.builder().option("hardwood.fixed-list-fast-path", "false").build();
     }
 
@@ -155,8 +157,8 @@ public class FixedSizeListDecodeBenchmark {
                     region.def(), 0, region.def().length,
                     region.numValues(), region.numRows(),
                     region.maxRepetitionLevel(), region.maxDefinitionLevel());
-            if (shape instanceof FixedSizeListShape.CleanFixedK clean) {
-                acc += clean.k();
+            if (shape instanceof FixedSizeListShape.FixedWidth fixedWidth) {
+                acc += fixedWidth.k();
             }
         }
         return acc;
