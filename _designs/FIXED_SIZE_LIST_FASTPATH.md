@@ -105,12 +105,16 @@ split by how the hybrid encoder stores the run of k−1 `1`s:
 
 **Large *k* (interior run ≥ 8).** The run of `1`s is an RLE run; the lone `0`
 and a few neighbours land in a short bit-packed boundary group at each row
-start. A scalar run-walk reads the RLE run's length **from its header** and
-advances by that count — hundreds of interior levels consumed as a single
-number, never scanned. Detection is O(rows), touching only boundary bytes. The
-split between the bit-packed boundary group and the RLE run is
-encoder-dependent (parquet-mr / arrow-cpp / arrow-rs differ); the walk matches
-the structure rather than assuming a split point.
+start. Because that per-row encoding (boundary group + RLE run) is byte-aligned
+and identical across rows, the whole stream is one **byte stride repeated once
+per row**. The detector parses only the first row to derive the stride and `k`,
+then verifies the stream is byte-periodic with that stride via a single bulk
+compare (`Arrays.equals` of the stream against itself shifted by one stride) —
+no per-row header parsing. The split between the boundary group and the RLE run
+is encoder-dependent (parquet-mr / arrow-cpp / arrow-rs differ), and some
+encoders lay a row out non-uniformly or unaligned; the stride tiling defers
+those to the scalar run-walk, which reads each RLE run's length from its header
+and matches the structure rather than assuming a split point.
 
 **Small *k* (interior run < 8, i.e. k ≤ 8).** No run reaches the RLE threshold,
 so the stream is entirely bit-packed. The fixed-width pattern is byte-periodic
@@ -124,8 +128,9 @@ levels — with only the sub-word remainder and the final padding-masked byte
 handled scalar. For a single-byte period the reference word is a constant; for a
 multi-byte period it is selected per word from a `period`-entry table keyed by the
 run's byte offset in the stream (its phase). A single word mismatch proves the
-shape is not fixed-width. Only the large-*k* boundary-then-RLE shape (no second
-boundary within the first run) falls to the scalar walk.
+shape is not fixed-width. Only irregular or unaligned encodings that neither the
+small-`k` tiling nor the large-`k` stride tiling recognises fall to the scalar
+walk.
 
 Both regimes are sound in O(rows): a vector interior is never read for decode or
 for verification, because the RLE length that says "k−1 ones" is a number in a
@@ -148,11 +153,11 @@ marker (`0` for a regular page/batch). All types live in
 
 - **Detector** — `FixedSizeListDetector.detect(...)` returns a sealed
   `FixedSizeListShape` (`FixedWidth(k)` / `NotApplicable`). The def-gate reuses
-  `RleBitPackingHybridDecoder.isSingleRleRunOf`; the rep verification is the
-  tiled small-*k* compare (`tryTiledBitPacked`) over all `k ≤ 8` — `matchesConstant`
-  for a single-byte period, `matchesPattern` for the 3/5/7-byte periods — with the
-  scalar run-walk as the fallback only for large `k` (RLE interior) and unexpected
-  multi-run shapes. The tiled compare reads each 8-byte word through a
+  `RleBitPackingHybridDecoder.isSingleRleRunOf`; the rep verification tiles both
+  regimes — `tryTiledBitPacked` for all `k ≤ 8` (`matchesConstant` for a single-byte
+  period, `matchesPattern` for the 3/5/7-byte periods) and `tryTiledRle` for the
+  large-`k` per-row byte stride — with the scalar run-walk left only as the fallback
+  for irregular or unaligned encodings neither recognises. The tiled compare reads each 8-byte word through a
   `byte[]`-to-`long` `VarHandle` (one unaligned load and bounds check per word) and
   tests it against the reference word: a constant for the single-byte period, or a
   per-phase entry for a multi-byte period. The reference words are precomputed once
@@ -259,12 +264,6 @@ Findings:
 
 ## Limitations & follow-ups
 
-- **k with an RLE interior and a high row count.** When the interior is
-  RLE-encoded (k ≥ 9) the detector uses the scalar O(rows) run-walk, whose cost
-  is per-row varint-header parsing. At k=16 (the most rows in the sweep) that is
-  ~20% of the fast path. A structural bulk check of the fixed
-  `boundary-group + constant-length-RLE` per-row stride would remove it; the
-  tiled compare does not apply there.
 - **Value-encoding ceiling.** The fast path recovers reconstruction cost only.
   Elements stored under the `LIST` shape do not gain per-element
   `BYTE_STREAM_SPLIT` / `ALP` unless the writer already chose them, and the fast

@@ -10,6 +10,7 @@ package dev.hardwood.internal.reader;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 
 import dev.hardwood.internal.encoding.RleBitPackingHybridDecoder;
 
@@ -140,13 +141,20 @@ public final class FixedSizeListDetector {
     /// between boundaries without expanding interior runs.
     private static FixedSizeListShape repetitionShape(
             byte[] data, int offset, int length, int numValues, int numRows) {
-        // Small-k regime: the whole stream is one bit-packed run and the
-        // fixed-width check reduces to a bulk compare against the tiled period.
-        // Decisive when it applies; null defers the large-k / multi-run cases to
-        // the scalar walk.
+        // Small-k regime: the whole stream is bit-packed and the fixed-width check
+        // reduces to a bulk compare against the tiled byte period. Null defers the
+        // large-k / multi-run cases.
         FixedSizeListShape tiled = tryTiledBitPacked(data, offset, length, numValues, numRows);
         if (tiled != null) {
             return tiled;
+        }
+
+        // Large-k regime: when every row is an identical byte stride (boundary
+        // group + RLE interior), verify the stream is that stride repeated with a
+        // single bulk compare. Null defers unusual splits to the scalar walk below.
+        FixedSizeListShape strided = tryTiledRle(data, offset, length, numValues, numRows);
+        if (strided != null) {
+            return strided;
         }
 
         int pos = offset;
@@ -334,6 +342,98 @@ public final class FixedSizeListDetector {
 
         if (k == 0 || !rowCountConsistent(numValues, numRows, k)) {
             return FixedSizeListShape.NOT_APPLICABLE;
+        }
+        return new FixedSizeListShape.FixedWidth(k);
+    }
+
+    /// Fast path for the large-`k` RLE-interior regime, where each row is encoded
+    /// as an identical byte stride — a bit-packed boundary group (the lone `0` plus
+    /// some leading `1`s) followed by an RLE run carrying the rest of the row's
+    /// `1`s — laid out on byte boundaries. The whole rep stream is then that stride
+    /// repeated once per row, so after deriving the stride and `k` from the first
+    /// row the rest is verified with one bulk byte compare, replacing the per-row
+    /// header parsing of the scalar walk.
+    ///
+    /// Returns `null` (defer to the scalar walk) for anything that is not this
+    /// clean, byte-aligned per-row stride: `k == 1`, a row that is not a whole
+    /// number of bytes (e.g. an all-bit-packed `k` in `9..15`), a single row, or an
+    /// encoder that lays rows out non-uniformly.
+    private static FixedSizeListShape tryTiledRle(
+            byte[] data, int offset, int length, int numValues, int numRows) {
+        int end = offset + length;
+        int pos = offset;
+        int idx = 0;
+        int k = -1;
+        int strideBytes = -1;
+
+        while (pos < end && k < 0) {
+            int runStart = pos;
+            long header = 0;
+            int shift = 0;
+            while (pos < end) {
+                int b = data[pos++] & 0xFF;
+                header |= (long) (b & 0x7F) << shift;
+                if ((b & 0x80) == 0) {
+                    break;
+                }
+                shift += 7;
+            }
+            if ((header & 1) == 1) {
+                int groups = (int) (header >> 1);
+                if (groups > end - pos) {
+                    return null;
+                }
+                for (int g = 0; g < groups && k < 0 && idx < numValues; g++) {
+                    int packed = data[pos + g] & 0xFF;
+                    for (int bit = 0; bit < 8 && idx < numValues; bit++) {
+                        int value = (packed >> bit) & 1;
+                        if (idx == 0) {
+                            // The stream must open on a boundary at its first bit.
+                            if (value != 0) {
+                                return null;
+                            }
+                        }
+                        else if (value == 0) {
+                            // Second boundary — row 1. Its byte offset is the stride,
+                            // but only if it lands on a fresh run (byte boundary).
+                            if (g != 0 || bit != 0) {
+                                return null;
+                            }
+                            k = idx;
+                            strideBytes = runStart - offset;
+                            break;
+                        }
+                        idx++;
+                    }
+                }
+                if (k < 0) {
+                    pos += groups;
+                }
+            }
+            else {
+                int runLen = (int) (header >> 1);
+                if (pos >= end || runLen > numValues - idx) {
+                    return null;
+                }
+                int value = data[pos++] & 0xFF;
+                if (value != 1 || idx == 0) {
+                    return null; // an opening or 0/>1 RLE run is not the large-k stride
+                }
+                idx += runLen; // interior 1s
+            }
+        }
+
+        if (k < 1 || strideBytes < 1 || length % strideBytes != 0) {
+            return null;
+        }
+        if ((long) (length / strideBytes) * k != numValues
+                || !rowCountConsistent(numValues, numRows, k)) {
+            return null;
+        }
+        // The stream must be the stride repeated: byte-periodic with period
+        // `strideBytes`, i.e. the stream shifted by one stride equals itself.
+        if (!Arrays.equals(data, offset + strideBytes, end, data, offset, end - strideBytes)) {
+            return null;
         }
         return new FixedSizeListShape.FixedWidth(k);
     }

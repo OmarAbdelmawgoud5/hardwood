@@ -74,6 +74,27 @@ class FixedSizeListDetectorTest {
         assertThat(detect(rep, 1536, 2)).isEqualTo(new FixedWidth(768));
     }
 
+    @Test
+    void detectsLargeKWithNonUniformEncoderSplit() {
+        // Row 0 uses an eight-value boundary group, row 1 a sixteen-value one, both
+        // encoding a clean k=768 row. The stride tiling requires byte-identical rows
+        // so it defers; the scalar fallback still recognises the shape.
+        byte[] wideRow = concat(
+                bitPacked(new int[] {0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}),
+                rle(1, 768 - 16));
+        byte[] rep = concat(largeVector(768), wideRow);
+        assertThat(detect(rep, 1536, 2)).isEqualTo(new FixedWidth(768));
+    }
+
+    @Test
+    void rejectsLargeKWithVaryingRowLength() {
+        // Two large rows of different lengths (768 then 760): not fixed-width. The
+        // stride derived from row 0 fails the value-count check, so the tiling
+        // defers and the scalar fallback rejects the non-uniform gaps.
+        byte[] rep = concat(largeVector(768), largeVector(760));
+        assertThat(detect(rep, 768 + 760, 2)).isEqualTo(FixedSizeListShape.NOT_APPLICABLE);
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(ints = {3, 5, 6, 7})
     void detectsMultiBytePeriodBitPacked(int k) {
