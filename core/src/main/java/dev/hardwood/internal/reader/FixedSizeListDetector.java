@@ -57,6 +57,37 @@ public final class FixedSizeListDetector {
     /// skips the `num_rows` cross-check, relying on `numValues % k == 0` instead.
     public static final int ROWS_UNKNOWN = -1;
 
+    /// Precomputed reference tiles for the small-`k` regime, indexed by `k` in
+    /// `1..8`. `TILE_PERIOD[k]` is the pattern's byte period (`k / gcd(k, 8)`) and
+    /// `TILE_WORDS[k]` holds one 64-bit reference word per phase (a byte offset
+    /// modulo the period), each word being the pattern's next 8 bytes little-endian.
+    /// The per-byte reference needed for a run's sub-word tail is the low byte of
+    /// its phase word, so the byte pattern is not stored separately. There are only
+    /// eight cases, so the tiled compare looks these up rather than rebuilding them
+    /// per page.
+    private static final int[] TILE_PERIOD = new int[9];
+    private static final long[][] TILE_WORDS = new long[9][];
+
+    static {
+        for (int k = 1; k <= 8; k++) {
+            int period = k / gcd(k, 8);
+            byte[] pat = new byte[period];
+            for (int j = 0; j < period; j++) {
+                pat[j] = (byte) patternByte(k, j);
+            }
+            long[] words = new long[period];
+            for (int phase = 0; phase < period; phase++) {
+                long word = 0;
+                for (int i = 0; i < 8; i++) {
+                    word |= (pat[(phase + i) % period] & 0xFFL) << (8 * i);
+                }
+                words[phase] = word;
+            }
+            TILE_PERIOD[k] = period;
+            TILE_WORDS[k] = words;
+        }
+    }
+
     private FixedSizeListDetector() {
     }
 
@@ -237,13 +268,10 @@ public final class FixedSizeListDetector {
             byte[] data, int offset, int length, int numValues, int numRows) {
         int pos = offset;
         int end = offset + length;
-        int idx = 0;        // global value index (a multiple of 8 at each run start)
-        int k = 0;          // established once the first bit-packed run is seen
-        int period = 0;     // byte period of the pattern (1 for k | 8, else 3/5/7)
-        int refByte = 0;    // single-byte-period reference (period == 1)
-        long refWord = 0;   // eight copies of refByte, for the word-at-a-time compare
-        byte[] refPat = null;   // multi-byte-period reference bytes (period > 1)
-        long[] refWords = null; // reference word per phase (period > 1)
+        int idx = 0;            // global value index (a multiple of 8 at each run start)
+        int k = 0;              // established once the first bit-packed run is seen
+        int period = 0;         // byte period of the pattern (1 for k | 8, else 3/5/7)
+        long[] refWords = null; // reference word per phase (from TILE_WORDS)
 
         while (idx < numValues) {
             if (pos >= end) {
@@ -288,31 +316,14 @@ public final class FixedSizeListDetector {
                 if (k == 0) {
                     return null; // no second boundary: large k, defer to the scalar walk
                 }
-                period = k / gcd(k, 8);
-                if (period == 1) {
-                    refByte = patternByte(k, 0);
-                    refWord = (refByte & 0xFFL) * 0x0101010101010101L;
-                }
-                else {
-                    refPat = new byte[period];
-                    for (int j = 0; j < period; j++) {
-                        refPat[j] = (byte) patternByte(k, j);
-                    }
-                    refWords = new long[period];
-                    for (int p = 0; p < period; p++) {
-                        long word = 0;
-                        for (int i = 0; i < 8; i++) {
-                            word |= (refPat[(p + i) % period] & 0xFFL) << (8 * i);
-                        }
-                        refWords[p] = word;
-                    }
-                }
+                period = TILE_PERIOD[k];
+                refWords = TILE_WORDS[k];
             }
 
             int compareBits = Math.min(groups * 8, numValues - idx);
             boolean matches = period == 1
-                    ? matchesConstant(data, payloadPos, refByte, refWord, compareBits)
-                    : matchesPattern(data, payloadPos, refPat, refWords, period,
+                    ? matchesConstant(data, payloadPos, refWords[0], compareBits)
+                    : matchesPattern(data, payloadPos, refWords, period,
                             (idx >> 3) % period, compareBits);
             if (!matches) {
                 return FixedSizeListShape.NOT_APPLICABLE;
@@ -349,9 +360,11 @@ public final class FixedSizeListDetector {
     /// Compares `compareBits` bits of a run's payload against a constant pattern
     /// byte tiled across it — a word (eight packed levels) at a time, with the
     /// sub-word remainder and the final padding-masked byte handled scalar. The
-    /// constant word carries no loop dependency, so the loop can vectorize.
-    private static boolean matchesConstant(byte[] data, int payloadPos, int refByte, long refWord,
+    /// constant word carries no loop dependency, so the loop can vectorize. The
+    /// single reference byte is `refWord`'s low byte (all eight lanes are equal).
+    private static boolean matchesConstant(byte[] data, int payloadPos, long refWord,
                                            int compareBits) {
+        int refByte = (int) (refWord & 0xFF);
         int fullBytes = compareBits >>> 3;
         int b = 0;
         for (; b + 8 <= fullBytes; b += 8) {
@@ -379,9 +392,9 @@ public final class FixedSizeListDetector {
     /// word at a time. `startPhase` is the run's byte offset in the stream modulo
     /// `period` — the phase of its first byte — selecting the first reference word
     /// from `refWords`; each full word advances the phase by 8 bytes. The sub-word
-    /// remainder and the final padding-masked byte compare against the per-byte
-    /// pattern `refPat`.
-    private static boolean matchesPattern(byte[] data, int payloadPos, byte[] refPat, long[] refWords,
+    /// remainder and the final padding-masked byte compare against the phase word's
+    /// low byte, which is the pattern byte at that phase.
+    private static boolean matchesPattern(byte[] data, int payloadPos, long[] refWords,
                                           int period, int startPhase, int compareBits) {
         int fullBytes = compareBits >>> 3;
         int b = 0;
@@ -393,7 +406,7 @@ public final class FixedSizeListDetector {
             phase = (phase + 8) % period;
         }
         for (; b < fullBytes; b++) {
-            if ((data[payloadPos + b] & 0xFF) != (refPat[phase] & 0xFF)) {
+            if ((data[payloadPos + b] & 0xFF) != (int) (refWords[phase] & 0xFF)) {
                 return false;
             }
             phase = phase + 1 == period ? 0 : phase + 1;
@@ -401,7 +414,7 @@ public final class FixedSizeListDetector {
         int tailBits = compareBits & 7;
         if (tailBits != 0) {
             int mask = (1 << tailBits) - 1;
-            if ((data[payloadPos + fullBytes] & mask) != (refPat[phase] & mask)) {
+            if ((data[payloadPos + fullBytes] & mask) != ((int) (refWords[phase] & 0xFF) & mask)) {
                 return false;
             }
         }

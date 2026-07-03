@@ -155,7 +155,10 @@ marker (`0` for a regular page/batch). All types live in
   multi-run shapes. The tiled compare reads each 8-byte word through a
   `byte[]`-to-`long` `VarHandle` (one unaligned load and bounds check per word) and
   tests it against the reference word: a constant for the single-byte period, or a
-  per-phase table entry for a multi-byte period. Tiling the multi-byte periods cuts
+  per-phase entry for a multi-byte period. The reference words are precomputed once
+  for the eight small-`k` cases (`TILE_WORDS`, keyed by `k`; the sub-word tail uses
+  a word's low byte), so no per-page rebuild or allocation is on the detection path.
+  Tiling the multi-byte periods cuts
   their isolated detector cost ~20× (≈6 ms → ≈0.3 ms per 8M values at k=3, in line
   with the single-byte periods); as with the single-byte SWAR, this does not move
   the end-to-end recovered fraction, since detection overlaps value decode.
