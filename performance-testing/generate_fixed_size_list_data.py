@@ -24,6 +24,10 @@ comparable across k. Files use DataPageV2 (which the fast path detects), no
 dictionary, and no compression, so the benchmark measures level handling and
 value decode rather than codec cost.
 
+It also writes an almost-fixed corpus (`nonfixed_k{k}_{last,second}.parquet` plus
+a flat floor) for FixedSizeListFallbackBenchmark, which measures the price of a
+failing detector scan on a page that ultimately falls back to the regular decode.
+
 Usage:
     python performance-testing/generate_fixed_size_list_data.py [output_dir]
 """
@@ -39,6 +43,12 @@ import pyarrow.parquet as pq
 # 3D-vector case); 4 and 8 are single-byte-period; 16+ have an RLE interior.
 K_SWEEP = [3, 4, 8, 16, 128, 768, 1536]
 TOTAL_VALUES = 8_000_000  # leaf floats per file; rows = TOTAL_VALUES // k
+
+# Almost-fixed corpus for FixedSizeListFallbackBenchmark (the detector's fallback
+# price). k=4 is the bit-packed regime, k=768 the RLE interior.
+NONFIXED_K = [4, 768]
+NONFIXED_VALUES = 2_000_000
+PAGE_ROWS = 20_000  # PyArrow's default rows-per-page cap
 
 DEFAULT_OUTPUT_DIR = os.path.join(
     "performance-testing", "test-data-setup", "target", "benchmark-data"
@@ -78,13 +88,46 @@ def write_pair(output_dir, k, rng):
           f"{os.path.basename(list_path)} (+v1) + {os.path.basename(flat_path)}")
 
 
+def write_nonfixed(output_dir, k, rng):
+    """Almost-fixed LIST files for FixedSizeListFallbackBenchmark: every row is a
+    present list of length k except one odd row (k + 1) placed in every page, so
+    the detector's def-gate passes (all present) but its rep scan fails and the
+    page falls back. `last` puts the odd row at each page's end (a near-full scan
+    before failing), `second` near its start (an early exit); a `flat` floor for
+    the same value count is written too."""
+    rows = NONFIXED_VALUES // k
+    for pos in ("last", "second"):
+        lengths = np.full(rows, k, dtype=np.int64)
+        for start in range(0, rows, PAGE_ROWS):
+            page_end = min(start + PAGE_ROWS, rows)
+            lengths[start + 1 if pos == "second" else page_end - 1] = k + 1
+        flat = rng.standard_normal(int(lengths.sum()), dtype=np.float32)
+        offsets = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int32)
+        vec = pa.ListArray.from_arrays(pa.array(offsets), pa.array(flat, type=pa.float32()))
+        table = pa.table(
+            {"vec": vec},
+            schema=pa.schema([("vec", pa.list_(pa.field("element", pa.float32(), nullable=False)))]))
+        pq.write_table(table, os.path.join(output_dir, f"nonfixed_k{k}_{pos}.parquet"),
+                       use_dictionary=False, compression=None, data_page_version="2.0")
+
+    flat = rng.standard_normal(NONFIXED_VALUES, dtype=np.float32)
+    flat_table = pa.table(
+        {"value": pa.array(flat, type=pa.float32())},
+        schema=pa.schema([("value", pa.float32(), False)]))
+    pq.write_table(flat_table, os.path.join(output_dir, f"nonfixed_k{k}_flat.parquet"),
+                   use_dictionary=False, compression=None, data_page_version="2.0")
+    print(f"k={k:5d}: non-fixed last/second (odd row per page) + flat floor")
+
+
 def main():
     output_dir = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_OUTPUT_DIR
     os.makedirs(output_dir, exist_ok=True)
     rng = np.random.default_rng(1234)
     for k in K_SWEEP:
         write_pair(output_dir, k, rng)
-    print(f"\nWrote {3 * len(K_SWEEP)} files to {output_dir}")
+    for k in NONFIXED_K:
+        write_nonfixed(output_dir, k, rng)
+    print(f"\nWrote {3 * len(K_SWEEP) + 3 * len(NONFIXED_K)} files to {output_dir}")
 
 
 if __name__ == "__main__":
