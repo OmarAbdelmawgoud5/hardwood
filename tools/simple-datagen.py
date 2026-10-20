@@ -5877,9 +5877,9 @@ pq.write_table(
 print(f"  - diff_nulls.parquet:          {DIFF_NULLS_ROWS} rows, nullable column for filter null-semantics")
 
 
-# Nullable Typed differential corpus (value-comparison harness, #548 P2). One row group,
-# every physical/logical type the value comparator covers, all columns OPTIONAL with
-# deterministic ~1/3 null pattern.
+# Nullable typed differential corpus (#578): diff_types.parquet's columns, all OPTIONAL, with
+# every third row null in each value column, so the value comparison also checks the
+# definition-level decode.
 DIFF_TYPES_OPTIONAL_ROWS = 200
 diff_types_optional_schema = pa.schema([
     ('__row__', pa.int64(), False),
@@ -5896,7 +5896,7 @@ diff_types_optional_schema = pa.schema([
 ])
 
 def _null_every_third(r, value):
-    # deterministic ~1/3 null rate, avoided using random instead r is used directly.
+    # Deterministic, so regenerating the file reproduces the same nulls.
     return None if r % 3 == 0 else value
 
 _date_base = date(2000, 1, 1).toordinal()
@@ -5917,13 +5917,14 @@ diff_types_optional_table = pa.table({
             for r in range(DIFF_TYPES_OPTIONAL_ROWS)],
 }, schema=diff_types_optional_schema)
 pq.write_table(
-    diff_types_table,
+    diff_types_optional_table,
     str(diff_dir / 'diff_types_optional.parquet'),
     use_dictionary=False,
     compression=None,
     data_page_version='2.0',
 )
-print(f"  - diff_types_optional.parquet:          {DIFF_TYPES_OPTIONAL_ROWS} rows, typed nullable value-comparison corpus")
+print(f"  - diff_types_optional.parquet: {DIFF_TYPES_OPTIONAL_ROWS} rows, typed nullable value-comparison corpus")
+
 # ============================================================================
 # Encrypted Test Files (Parquet Modular Encryption)
 # ============================================================================
